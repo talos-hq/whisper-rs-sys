@@ -862,7 +862,7 @@ struct whisper_state {
 
     whisper_mel mel;
 
-    whisper_batch batch;
+    whisper_batch batch = {};
 
     whisper_decoder decoders[WHISPER_MAX_DECODERS];
 
@@ -1002,6 +1002,7 @@ static bool whisper_kv_cache_init(
     cache.buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
     if (!cache.buffer) {
         WHISPER_LOG_ERROR("%s: failed to allocate memory for the kv cache\n", __func__);
+        ggml_free(ctx);
         return false;
     }
 
@@ -1014,6 +1015,7 @@ static bool whisper_kv_cache_init(
 
 static void whisper_kv_cache_free(struct whisper_kv_cache & cache) {
     ggml_backend_buffer_free(cache.buffer);
+    cache.buffer = nullptr;
 }
 
 static bool whisper_kv_cache_find_slot(
@@ -1850,12 +1852,15 @@ static bool whisper_model_load(struct whisper_model_loader * loader, whisper_con
         ggml_backend_buffer_type_t buft = p.first;
         ggml_context * ctx = p.second;
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
-        if (buf) {
-            model.buffers.emplace_back(buf);
-
-            size_t size_main = ggml_backend_buffer_get_size(buf);
-            WHISPER_LOG_INFO("%s: %12s total size = %8.2f MB\n", __func__, ggml_backend_buffer_name(buf), size_main / 1e6);
+        if (!buf) {
+            WHISPER_LOG_ERROR("%s: failed to allocate the %s buffer for the model\n", __func__, ggml_backend_buft_name(buft));
+            return false;
         }
+
+        model.buffers.emplace_back(buf);
+
+        size_t size_main = ggml_backend_buffer_get_size(buf);
+        WHISPER_LOG_INFO("%s: %12s total size = %8.2f MB\n", __func__, ggml_backend_buffer_name(buf), size_main / 1e6);
     }
 
     // load weights
@@ -3723,7 +3728,7 @@ struct whisper_context * whisper_init_with_params_no_state(struct whisper_model_
     if (!whisper_model_load(loader, *ctx)) {
         loader->close(loader->context);
         WHISPER_LOG_ERROR("%s: failed to load model\n", __func__);
-        delete ctx;
+        whisper_free(ctx);
         return nullptr;
     }
 
@@ -4980,12 +4985,16 @@ struct whisper_vad_context * whisper_vad_init_with_params(
         ggml_backend_buffer_type_t buft = p.first;
         ggml_context * ctx = p.second;
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
-        if (buf) {
-            model.buffers.emplace_back(buf);
-
-            size_t size_main = ggml_backend_buffer_get_size(buf);
-            WHISPER_LOG_INFO("%s: %12s total size = %8.2f MB\n", __func__, ggml_backend_buffer_name(buf), size_main / 1e6);
+        if (!buf) {
+            WHISPER_LOG_ERROR("%s: failed to allocate the %s buffer for the model\n", __func__, ggml_backend_buft_name(buft));
+            whisper_vad_free(vctx);
+            return nullptr;
         }
+
+        model.buffers.emplace_back(buf);
+
+        size_t size_main = ggml_backend_buffer_get_size(buf);
+        WHISPER_LOG_INFO("%s: %12s total size = %8.2f MB\n", __func__, ggml_backend_buffer_name(buf), size_main / 1e6);
     }
 
     // load weights
@@ -7132,7 +7141,9 @@ int whisper_full_with_state(
                                 ctx->model.hparams.n_text_layer,
                                 GGML_PAD(ctx->model.hparams.n_text_ctx, 256)*factor)) {
                         WHISPER_LOG_ERROR("%s: whisper_kv_cache_init() failed for self-attention cache\n", __func__);
-                        whisper_free_state(state);
+                        // the state belongs to the caller: leave it valid and force a
+                        // re-allocation of the KV cache on the next call
+                        state->kv_self_n_dec = 0;
                         return -7;
                     }
 
