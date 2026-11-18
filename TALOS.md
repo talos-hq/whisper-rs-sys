@@ -1,7 +1,7 @@
 # whisper-rs-sys 0.15.0, patched for talos-vox
 
 This is the crates.io release of `whisper-rs-sys` 0.15.0, unmodified in the
-first commit, plus fixes to the vendored `whisper.cpp/src/whisper.cpp` so
+first commit, plus fixes to the vendored whisper.cpp and ggml sources so
 that running out of GPU memory returns an error instead of crashing the
 process. talos-vox uses it through `[patch.crates-io]` at a pinned rev. See
 talos-hq/talos-vox#4.
@@ -23,8 +23,14 @@ The fixes:
 - When `whisper_full_with_state` can't grow the KV cache for more decoders
   (beam search), it returns -7 without freeing the caller's state, which
   the caller would otherwise free a second time.
+- ggml: `ggml_backend_sched_alloc_splits` checks the result of
+  `ggml_gallocr_reserve_n`. When a compute buffer couldn't be allocated
+  (e.g. `whisper_init_state` on a GPU with room for the KV cache but not
+  the encoder's compute buffer), it went on to place tensors in the
+  missing buffer and segfaulted. Backported from upstream ggml, which
+  already checks it.
 
 To move to a new whisper-rs-sys release: import the new `.crate` contents in
-one commit, re-apply the last commit's change to `whisper.cpp/src/whisper.cpp`
-(dropping anything upstream has since fixed), and bump the rev in
+one commit, re-apply the later commits' changes (dropping anything upstream
+has since fixed), and bump the rev in
 talos-vox's `Cargo.toml`.
